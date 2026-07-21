@@ -76,6 +76,7 @@ class _EcfrTitleResult:
     source_paths: tuple[Path, ...] = ()
     transcription_evidence: Mapping[str, Mapping[str, str]] | None = None
     source_sha256: str | None = None
+    source_sha256_by_part: Mapping[str, str] | None = None
     error: str | None = None
 
 
@@ -401,15 +402,27 @@ def _walk_inventory_items(
     part: str | None = None,
     subpart: str | None = None,
     only_chapter: str | None = None,
+    source_sha256_by_part: Mapping[str, str] | None = None,
+    per_part: bool = False,
 ) -> Iterator[SourceInventoryItem]:
     node_type = node.get("type")
     identifier = str(node.get("identifier") or "")
-    source_path = (
+    default_source_path = (
         _ecfr_source_key(run_id, title, only_part)
         if run_id is not None
         else _ecfr_source_relative_name(title, only_part)
     )
-    source_sha256 = source_sha256_by_title.get(title) if source_sha256_by_title else None
+    default_source_sha256 = source_sha256_by_title.get(title) if source_sha256_by_title else None
+
+    def _source_for(part_id: str | None) -> tuple[str, str | None]:
+        if per_part and part_id:
+            relative = (
+                _ecfr_source_key(run_id, title, part_id)
+                if run_id is not None
+                else _ecfr_source_relative_name(title, part_id)
+            )
+            return relative, (source_sha256_by_part or {}).get(part_id)
+        return default_source_path, default_source_sha256
     if node_type == "chapter":
         chapter = identifier
     elif node_type == "subchapter":
@@ -423,12 +436,13 @@ def _walk_inventory_items(
         if only_chapter is not None and chapter != only_chapter:
             return
         part_path = f"us/regulation/{title}/{part}"
+        part_source_path, part_source_sha256 = _source_for(part)
         yield SourceInventoryItem(
             citation_path=part_path,
             source_url=_ecfr_part_url(title, part, chapter, subchapter),
-            source_path=source_path,
+            source_path=part_source_path,
             source_format="ecfr-xml",
-            sha256=source_sha256,
+            sha256=part_source_sha256,
             metadata={
                 "kind": "part",
                 "title": title,
@@ -444,12 +458,13 @@ def _walk_inventory_items(
             return
         subpart = identifier
         subpart_path = f"us/regulation/{title}/{part}/subpart-{subpart}"
+        subpart_source_path, subpart_source_sha256 = _source_for(part)
         yield SourceInventoryItem(
             citation_path=subpart_path,
             source_url=_ecfr_subpart_url(title, part, subpart, chapter, subchapter),
-            source_path=source_path,
+            source_path=subpart_source_path,
             source_format="ecfr-xml",
-            sha256=source_sha256,
+            sha256=subpart_source_sha256,
             metadata={
                 "kind": "subpart",
                 "title": title,
@@ -475,6 +490,7 @@ def _walk_inventory_items(
                     if subpart
                     else f"us/regulation/{title}/{actual_part}"
                 )
+                section_source_path, section_source_sha256 = _source_for(part or actual_part)
                 yield SourceInventoryItem(
                     citation_path=citation_path,
                     source_url=_ecfr_section_url(
@@ -484,9 +500,9 @@ def _walk_inventory_items(
                         chapter,
                         subchapter,
                     ),
-                    source_path=source_path,
+                    source_path=section_source_path,
                     source_format="ecfr-xml",
-                    sha256=source_sha256,
+                    sha256=section_source_sha256,
                     metadata={
                         "kind": "section",
                         "title": title,
@@ -515,6 +531,8 @@ def _walk_inventory_items(
             part,
             subpart,
             only_chapter=only_chapter,
+            source_sha256_by_part=source_sha256_by_part,
+            per_part=per_part,
         )
 
 
@@ -525,7 +543,9 @@ def build_ecfr_inventory_from_structures(
     run_id: str | None = None,
     source_sha256_by_title: Mapping[int, str] | None = None,
     only_chapter: str | None = None,
+    source_sha256_by_part: Mapping[str, str] | None = None,
 ) -> EcfrInventory:
+    per_part = only_chapter is not None and only_part is None
     items: list[SourceInventoryItem] = []
     part_count = 0
     for structure in structures:
@@ -543,6 +563,8 @@ def build_ecfr_inventory_from_structures(
             only_part,
             source_sha256_by_title,
             only_chapter=only_chapter,
+            source_sha256_by_part=source_sha256_by_part,
+            per_part=per_part,
         ):
             items.append(item)
             if limit is not None and len(items) >= limit:
@@ -1114,6 +1136,7 @@ def extract_ecfr(
     run_id = ecfr_run_id(version, only_title, only_part, limit, only_chapter)
     source_paths: list[Path] = []
     source_sha256_by_title: dict[int, str] = {}
+    source_sha256_by_part: dict[str, str] = {}
 
     for structure in structures:
         title = int(structure["identifier"])
@@ -1181,6 +1204,7 @@ def extract_ecfr(
             expression_date_text,
             allowed_citation_paths,
             only_part=only_part,
+            only_chapter=only_chapter,
             workers=workers,
             graphic_transcriptions=graphic_transcriptions,
         )
@@ -1189,6 +1213,7 @@ def extract_ecfr(
         source_paths.extend(result.source_paths)
         if result.source_sha256 is not None:
             source_sha256_by_title[result.title] = result.source_sha256
+        source_sha256_by_part.update(result.source_sha256_by_part or {})
         if result.error is not None:
             failed_titles.add(result.title)
             title_errors.append(result.error)
@@ -1240,6 +1265,8 @@ def extract_ecfr(
         limit=limit,
         run_id=run_id,
         source_sha256_by_title=source_sha256_by_title,
+        only_chapter=only_chapter,
+        source_sha256_by_part=source_sha256_by_part,
     )
     inventory_path = store.inventory_path("us", DocumentClass.REGULATION, run_id)
     store.write_inventory(inventory_path, inventory.items)
@@ -1342,6 +1369,7 @@ def _extract_title_results(
     allowed_citation_paths: set[str],
     *,
     only_part: str | None,
+    only_chapter: str | None,
     workers: int,
     graphic_transcriptions: Mapping[str, EcfrGraphicTranscription] | None,
 ) -> Iterator[_EcfrTitleResult]:
@@ -1360,6 +1388,7 @@ def _extract_title_results(
                 allowed_citation_paths,
                 only_part,
                 graphic_transcriptions,
+                only_chapter,
             ): title
             for title, targets, _paths in pending_titles
         }
@@ -1378,49 +1407,88 @@ def _extract_one_title(
     allowed_citation_paths: set[str],
     only_part: str | None,
     graphic_transcriptions: Mapping[str, EcfrGraphicTranscription] | None,
+    only_chapter: str | None,
 ) -> _EcfrTitleResult:
-    source_relative_name = _ecfr_source_relative_name(title, only_part)
-    source_path = store.source_path(
-        "us",
-        DocumentClass.REGULATION,
-        run_id,
-        source_relative_name,
-    )
-    try:
+    per_part = only_chapter is not None and only_part is None
+
+    def _process(
+        source_relative_name: str,
+        source_key: str,
+        doc_targets: tuple[EcfrPartTarget, ...],
+        fetch_label: str,
+        fetch: Callable[[], str],
+    ) -> tuple[tuple[ProvisionRecord, ...], Path, str, tuple[Path, ...], dict[str, dict[str, str]]]:
+        source_path = store.source_path(
+            "us",
+            DocumentClass.REGULATION,
+            run_id,
+            source_relative_name,
+        )
         if source_path.exists():
             source_bytes = source_path.read_bytes()
             xml_content = source_bytes.decode("utf-8")
             source_sha256 = sha256_bytes(source_bytes)
         else:
-            fetch_label = f"{title} CFR part {only_part}" if only_part else f"{title} CFR"
-            xml_content = _fetch_with_retries(
-                fetch_label,
-                lambda: (
-                    fetch_ecfr_part_xml(title, only_part, as_of)
-                    if only_part is not None
-                    else fetch_ecfr_title_xml(title, as_of)
-                ),
-            )
+            xml_content = _fetch_with_retries(fetch_label, fetch)
             source_sha256 = store.write_text(source_path, xml_content)
-        graphic_paths, used_transcriptions, transcription_evidence = (
-            _capture_ecfr_math_graphics(
-                store,
-                run_id,
-                xml_content,
-                graphic_transcriptions or {},
-            )
+        graphic_paths, used_transcriptions, evidence = _capture_ecfr_math_graphics(
+            store,
+            run_id,
+            xml_content,
+            graphic_transcriptions or {},
         )
         provisions = tuple(
             iter_ecfr_title_provisions(
                 xml_content,
-                targets,
+                doc_targets,
                 version=run_id,
-                source_path=_ecfr_source_key(run_id, title, only_part),
+                source_path=source_key,
                 source_as_of=as_of,
                 expression_date=expression_date,
                 allowed_citation_paths=allowed_citation_paths,
                 graphic_transcriptions=used_transcriptions,
             )
+        )
+        return provisions, source_path, source_sha256, graphic_paths, evidence
+
+    try:
+        if per_part:
+            provisions: list[ProvisionRecord] = []
+            source_paths: list[Path] = []
+            sha_by_part: dict[str, str] = {}
+            evidence_all: dict[str, dict[str, str]] = {}
+            for target in targets:
+                part_provisions, part_source_path, part_sha, graphic_paths, evidence = _process(
+                    _ecfr_source_relative_name(title, target.part),
+                    _ecfr_source_key(run_id, title, target.part),
+                    (target,),
+                    f"{title} CFR part {target.part}",
+                    partial(fetch_ecfr_part_xml, title, target.part, as_of),
+                )
+                provisions.extend(part_provisions)
+                source_paths.append(part_source_path)
+                source_paths.extend(graphic_paths)
+                sha_by_part[target.part] = part_sha
+                evidence_all.update(evidence)
+            return _EcfrTitleResult(
+                title=title,
+                provisions=tuple(provisions),
+                source_paths=tuple(source_paths),
+                transcription_evidence=evidence_all,
+                source_sha256=None,
+                source_sha256_by_part=sha_by_part,
+            )
+
+        provisions_single, single_source_path, single_sha, graphic_paths, evidence = _process(
+            _ecfr_source_relative_name(title, only_part),
+            _ecfr_source_key(run_id, title, only_part),
+            targets,
+            f"{title} CFR part {only_part}" if only_part else f"{title} CFR",
+            (
+                partial(fetch_ecfr_part_xml, title, only_part, as_of)
+                if only_part is not None
+                else partial(fetch_ecfr_title_xml, title, as_of)
+            ),
         )
     except (
         TimeoutError,
@@ -1432,8 +1500,8 @@ def _extract_one_title(
         return _EcfrTitleResult(title=title, error=f"{title} CFR: {exc}")
     return _EcfrTitleResult(
         title=title,
-        provisions=provisions,
-        source_paths=(source_path, *graphic_paths),
-        transcription_evidence=transcription_evidence,
-        source_sha256=source_sha256,
+        provisions=provisions_single,
+        source_paths=(single_source_path, *graphic_paths),
+        transcription_evidence=evidence,
+        source_sha256=single_sha,
     )

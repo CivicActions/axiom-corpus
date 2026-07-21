@@ -435,6 +435,110 @@ def test_extract_ecfr_writes_source_inventory_provisions_and_coverage(tmp_path, 
     assert records[1].expression_date == "2024-04-16"
 
 
+TITLE_48_CHAPTER_STRUCTURE = {
+    "identifier": "48",
+    "label": "Title 48-Federal Acquisition Regulations System",
+    "type": "title",
+    "children": [
+        {
+            "identifier": "1",
+            "label": "Chapter 1-Federal Acquisition Regulation",
+            "type": "chapter",
+            "children": [
+                {
+                    "identifier": "1",
+                    "label": "Part 1-Federal Acquisition Regulations System",
+                    "type": "part",
+                    "children": [
+                        {"identifier": "1.101", "label": "§ 1.101 Purpose.", "type": "section"}
+                    ],
+                },
+                {
+                    "identifier": "52",
+                    "label": "Part 52-Solicitation Provisions and Contract Clauses",
+                    "type": "part",
+                    "children": [
+                        {"identifier": "52.101", "label": "§ 52.101 Using Part 52.", "type": "section"}
+                    ],
+                },
+            ],
+        },
+        {
+            "identifier": "2",
+            "label": "Chapter 2-Defense Acquisition Regulations System",
+            "type": "chapter",
+            "children": [
+                {
+                    "identifier": "252",
+                    "label": "Part 252-Clauses",
+                    "type": "part",
+                    "children": [
+                        {"identifier": "252.101", "label": "§ 252.101 Using Part 252.", "type": "section"}
+                    ],
+                }
+            ],
+        },
+    ],
+}
+
+
+def _far_part_xml(part: str) -> str:
+    return f"""
+<ECFR>
+  <DIV5 N="{part}" TYPE="PART">
+    <HEAD>PART {part}-FAR</HEAD>
+    <DIV8 N="&#167; {part}.101" TYPE="SECTION">
+      <HEAD>&#167; {part}.101 Heading.</HEAD>
+      <P>Body of {part}.101.</P>
+    </DIV8>
+  </DIV5>
+</ECFR>
+"""
+
+
+def test_extract_ecfr_chapter_scope_fetches_per_part(tmp_path, monkeypatch):
+    import axiom_corpus.corpus.ecfr as ecfr
+
+    monkeypatch.setattr(
+        ecfr, "fetch_ecfr_structure", lambda title, as_of: TITLE_48_CHAPTER_STRUCTURE
+    )
+    monkeypatch.setattr(
+        ecfr,
+        "fetch_ecfr_title_xml",
+        lambda title, as_of: pytest.fail("chapter-scoped extract fetched a full title"),
+    )
+    monkeypatch.setattr(ecfr, "fetch_ecfr_part_xml", lambda title, part, as_of: _far_part_xml(part))
+    store = CorpusArtifactStore(tmp_path / "corpus")
+
+    report = extract_ecfr(
+        store,
+        version="far-2025",
+        as_of="2025-06-02",
+        expression_date=date(2025, 6, 2),
+        only_title=48,
+        only_chapter="1",
+    )
+
+    run_id = "far-2025-title-48-chapter-1"
+    assert report.coverage.complete
+    # One coherent scope, per-part snapshots (never the whole title).
+    assert (store.root / f"sources/us/regulation/{run_id}/ecfr/title-48-part-1.xml").exists()
+    assert (store.root / f"sources/us/regulation/{run_id}/ecfr/title-48-part-52.xml").exists()
+    assert not (store.root / f"sources/us/regulation/{run_id}/ecfr/title-48.xml").exists()
+
+    records = load_provisions(report.provisions_path)
+    paths = {record.citation_path for record in records}
+    assert {"us/regulation/48/1", "us/regulation/48/1/101", "us/regulation/48/52/101"} <= paths
+    # Chapter 2 (DFARS) is excluded.
+    assert not any(path.startswith("us/regulation/48/252") for path in paths)
+
+    by_path = {record.citation_path: record for record in records}
+    assert by_path["us/regulation/48/52/101"].source_path == (
+        f"sources/us/regulation/{run_id}/ecfr/title-48-part-52.xml"
+    )
+
+
+
 def test_extract_ecfr_archives_sha_bound_formula_graphics(tmp_path, monkeypatch):
     import axiom_corpus.corpus.ecfr as ecfr
 
