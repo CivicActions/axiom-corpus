@@ -1,0 +1,1 @@
+Add an opt-in `extract-far-overhaul` command that ingests the Revolutionary FAR Overhaul (RFO) draft from `axiom-scrapers` source-section output under the new `regulation-draft` document class (`us/regulation-draft/48/...`). The command is a no-op skip when the scrape data is absent.

@@ -84,10 +84,13 @@ def ecfr_run_id(
     only_title: int | None,
     only_part: str | None,
     limit: int | None,
+    only_chapter: str | None = None,
 ) -> str:
     parts = [version]
     if only_title is not None:
         parts.append(f"title-{only_title}")
+    if only_chapter is not None:
+        parts.append(f"chapter-{only_chapter}")
     if only_part is not None:
         parts.append(f"part-{only_part}")
     if limit is not None:
@@ -397,6 +400,7 @@ def _walk_inventory_items(
     subchapter: str | None = None,
     part: str | None = None,
     subpart: str | None = None,
+    only_chapter: str | None = None,
 ) -> Iterator[SourceInventoryItem]:
     node_type = node.get("type")
     identifier = str(node.get("identifier") or "")
@@ -415,6 +419,8 @@ def _walk_inventory_items(
             return
         part = identifier
         if only_part is not None and part != only_part:
+            return
+        if only_chapter is not None and chapter != only_chapter:
             return
         part_path = f"us/regulation/{title}/{part}"
         yield SourceInventoryItem(
@@ -508,6 +514,7 @@ def _walk_inventory_items(
             subchapter,
             part,
             subpart,
+            only_chapter=only_chapter,
         )
 
 
@@ -517,6 +524,7 @@ def build_ecfr_inventory_from_structures(
     limit: int | None = None,
     run_id: str | None = None,
     source_sha256_by_title: Mapping[int, str] | None = None,
+    only_chapter: str | None = None,
 ) -> EcfrInventory:
     items: list[SourceInventoryItem] = []
     part_count = 0
@@ -524,7 +532,8 @@ def build_ecfr_inventory_from_structures(
         part_targets = tuple(
             target
             for target in part_targets_from_structure(structure)
-            if only_part is None or target.part == only_part
+            if (only_part is None or target.part == only_part)
+            and (only_chapter is None or target.chapter == only_chapter)
         )
         part_count += len(part_targets)
         for item in _walk_inventory_items(
@@ -533,6 +542,7 @@ def build_ecfr_inventory_from_structures(
             run_id,
             only_part,
             source_sha256_by_title,
+            only_chapter=only_chapter,
         ):
             items.append(item)
             if limit is not None and len(items) >= limit:
@@ -550,6 +560,7 @@ def build_ecfr_inventory(
     only_part: str | None = None,
     limit: int | None = None,
     run_id: str | None = None,
+    only_chapter: str | None = None,
 ) -> EcfrInventory:
     titles = (only_title,) if only_title is not None else DEFAULT_CFR_TITLES
     structures = tuple(_fetch_available_structures(titles, as_of, strict=only_title is not None))
@@ -558,6 +569,7 @@ def build_ecfr_inventory(
         only_part=only_part,
         limit=limit,
         run_id=run_id,
+        only_chapter=only_chapter,
     )
 
 
@@ -1090,6 +1102,7 @@ def extract_ecfr(
     expression_date: date | None = None,
     only_title: int | None = None,
     only_part: str | None = None,
+    only_chapter: str | None = None,
     limit: int | None = None,
     workers: int = 2,
     progress_stream: TextIO | None = None,
@@ -1098,7 +1111,7 @@ def extract_ecfr(
     expression_date_text = (expression_date or date.fromisoformat(as_of)).isoformat()
     titles = (only_title,) if only_title is not None else DEFAULT_CFR_TITLES
     structures = tuple(_fetch_available_structures(titles, as_of, strict=only_title is not None))
-    run_id = ecfr_run_id(version, only_title, only_part, limit)
+    run_id = ecfr_run_id(version, only_title, only_part, limit, only_chapter)
     source_paths: list[Path] = []
     source_sha256_by_title: dict[int, str] = {}
 
@@ -1118,6 +1131,7 @@ def extract_ecfr(
         only_part=only_part,
         limit=limit,
         run_id=run_id,
+        only_chapter=only_chapter,
     )
     allowed_citation_paths = {item.citation_path for item in inventory.items}
 
@@ -1141,7 +1155,8 @@ def extract_ecfr(
         targets = tuple(
             target
             for target in part_targets_from_structure(structure)
-            if only_part is None or target.part == only_part
+            if (only_part is None or target.part == only_part)
+            and (only_chapter is None or target.chapter == only_chapter)
         )
         pending_titles.append((title, targets, paths))
 

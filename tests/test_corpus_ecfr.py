@@ -221,6 +221,63 @@ def test_build_ecfr_inventory_from_structure_includes_subparts():
     assert inventory.items[0].sha256 == "abc123"
 
 
+def test_build_ecfr_inventory_only_chapter_scopes_to_far():
+    """`only_chapter` isolates one CFR chapter (e.g. 48 CFR Ch.1 = the FAR)."""
+    title_48 = {
+        "identifier": "48",
+        "label": "Title 48-Federal Acquisition Regulations System",
+        "type": "title",
+        "children": [
+            {
+                "identifier": "1",
+                "label": "Chapter 1-Federal Acquisition Regulation",
+                "type": "chapter",
+                "children": [
+                    {
+                        "identifier": "52",
+                        "label": "Part 52-Solicitation Provisions and Contract Clauses",
+                        "type": "part",
+                        "children": [
+                            {
+                                "identifier": "52.101",
+                                "label": "§ 52.101 Using Part 52.",
+                                "type": "section",
+                            }
+                        ],
+                    }
+                ],
+            },
+            {
+                "identifier": "2",
+                "label": "Chapter 2-Defense Acquisition Regulations System",
+                "type": "chapter",
+                "children": [
+                    {
+                        "identifier": "252",
+                        "label": "Part 252-Solicitation Provisions and Contract Clauses",
+                        "type": "part",
+                        "children": [
+                            {
+                                "identifier": "252.101",
+                                "label": "§ 252.101 Using Part 252.",
+                                "type": "section",
+                            }
+                        ],
+                    }
+                ],
+            },
+        ],
+    }
+
+    inventory = build_ecfr_inventory_from_structures((title_48,), only_chapter="1")
+
+    assert inventory.part_count == 1
+    citation_paths = [item.citation_path for item in inventory.items]
+    assert citation_paths == ["us/regulation/48/52", "us/regulation/48/52/101"]
+    assert all(item.metadata["chapter"] == "1" for item in inventory.items)
+    assert not any(path.startswith("us/regulation/48/252") for path in citation_paths)
+
+
 def test_iter_ecfr_title_provisions_builds_normalized_records():
     records = tuple(
         iter_ecfr_title_provisions(

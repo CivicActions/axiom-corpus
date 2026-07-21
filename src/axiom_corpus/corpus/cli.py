@@ -55,6 +55,7 @@ from axiom_corpus.corpus.ecfr import (
     load_ecfr_graphic_transcriptions,
 )
 from axiom_corpus.corpus.eli import extract_eli_documents
+from axiom_corpus.corpus.far_overhaul import extract_far_overhaul
 from axiom_corpus.corpus.federal_register import (
     DEFAULT_DOCUMENT_TYPES,
     FederalRegisterCfrSectionRef,
@@ -377,13 +378,14 @@ def _cmd_verify_scope_tracked(args: argparse.Namespace) -> int:
 
 def _cmd_inventory_ecfr(args: argparse.Namespace) -> int:
     store = CorpusArtifactStore(args.base)
-    run_id = ecfr_run_id(args.version, args.only_title, args.only_part, args.limit)
+    run_id = ecfr_run_id(args.version, args.only_title, args.only_part, args.limit, args.only_chapter)
     inventory = build_ecfr_inventory(
         as_of=args.as_of,
         only_title=args.only_title,
         only_part=args.only_part,
         limit=args.limit,
         run_id=run_id,
+        only_chapter=args.only_chapter,
     )
     out = store.inventory_path("us", DocumentClass.REGULATION, run_id)
     store.write_inventory(out, inventory.items)
@@ -1203,6 +1205,7 @@ def _cmd_extract_ecfr(args: argparse.Namespace) -> int:
         expression_date=expression_date,
         only_title=args.only_title,
         only_part=args.only_part,
+        only_chapter=args.only_chapter,
         limit=args.limit,
         workers=args.workers,
         progress_stream=sys.stderr,
@@ -1238,6 +1241,38 @@ def _cmd_extract_ecfr(args: argparse.Namespace) -> int:
     if graphic_transcriptions and report.title_error_count:
         return 2
     return 0 if report.coverage.complete or args.allow_incomplete else 2
+
+
+def _cmd_extract_far_overhaul(args: argparse.Namespace) -> int:
+    store = CorpusArtifactStore(args.base)
+    expression_date = date.fromisoformat(args.expression_date) if args.expression_date else None
+    report = extract_far_overhaul(
+        store,
+        version=args.version,
+        scrape_dir=args.scrape_dir,
+        expression_date=expression_date,
+        source_as_of=args.source_as_of,
+        progress_stream=sys.stderr,
+    )
+    payload: dict[str, Any] = {
+        "jurisdiction": report.jurisdiction,
+        "document_class": report.document_class,
+        "version": report.version,
+        "skipped": report.skipped,
+        "scrape_dir": str(args.scrape_dir),
+        "part_count": report.part_count,
+        "section_count": report.section_count,
+        "provisions_written": report.provisions_written,
+    }
+    if not report.skipped and report.coverage is not None:
+        payload["inventory_path"] = str(report.inventory_path)
+        payload["provisions_path"] = str(report.provisions_path)
+        payload["coverage_path"] = str(report.coverage_path)
+        payload["coverage_complete"] = report.coverage.complete
+    print(json.dumps(payload, indent=2, sort_keys=True))
+    if report.skipped:
+        return 0
+    return 0 if report.coverage is not None and report.coverage.complete else 2
 
 
 def _cmd_extract_usc(args: argparse.Namespace) -> int:
@@ -5249,6 +5284,7 @@ def build_parser() -> argparse.ArgumentParser:
     inventory_ecfr.add_argument("--version", "--run-id", dest="version", required=True)
     inventory_ecfr.add_argument("--as-of", required=True)
     inventory_ecfr.add_argument("--only-title", type=int)
+    inventory_ecfr.add_argument("--only-chapter")
     inventory_ecfr.add_argument("--only-part")
     inventory_ecfr.add_argument("--limit", type=int)
     inventory_ecfr.set_defaults(func=_cmd_inventory_ecfr)
@@ -5291,6 +5327,7 @@ def build_parser() -> argparse.ArgumentParser:
     extract_ecfr_cmd.add_argument("--as-of", required=True)
     extract_ecfr_cmd.add_argument("--expression-date")
     extract_ecfr_cmd.add_argument("--only-title", type=int)
+    extract_ecfr_cmd.add_argument("--only-chapter")
     extract_ecfr_cmd.add_argument("--only-part")
     extract_ecfr_cmd.add_argument("--limit", type=int)
     extract_ecfr_cmd.add_argument("--workers", type=int, default=2)
@@ -5304,6 +5341,29 @@ def build_parser() -> argparse.ArgumentParser:
     )
     extract_ecfr_cmd.add_argument("--allow-incomplete", action="store_true")
     extract_ecfr_cmd.set_defaults(func=_cmd_extract_ecfr)
+
+    extract_far_overhaul_cmd = sub.add_parser(
+        "extract-far-overhaul",
+        help=(
+            "Ingest the Revolutionary FAR Overhaul (RFO) draft from axiom-scrapers "
+            "source-section output. Opt-in: skips when the scrape data is absent."
+        ),
+    )
+    extract_far_overhaul_cmd.add_argument("--base", type=Path, required=True)
+    extract_far_overhaul_cmd.add_argument("--version", required=True)
+    extract_far_overhaul_cmd.add_argument(
+        "--scrape-dir",
+        type=Path,
+        required=True,
+        help=(
+            "Directory holding the axiom-scrapers RFO source-sections "
+            "(us-federal/regulations-draft/part-*/*.meta.yaml). Missing or empty "
+            "directories are a no-op skip."
+        ),
+    )
+    extract_far_overhaul_cmd.add_argument("--expression-date")
+    extract_far_overhaul_cmd.add_argument("--source-as-of", "--as-of", dest="source_as_of")
+    extract_far_overhaul_cmd.set_defaults(func=_cmd_extract_far_overhaul)
 
     extract_usc_cmd = sub.add_parser(
         "extract-usc",

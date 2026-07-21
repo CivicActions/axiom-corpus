@@ -20,6 +20,7 @@ class DocumentClass(StrEnum):
 
     STATUTE = "statute"
     REGULATION = "regulation"
+    REGULATION_DRAFT = "regulation-draft"
     GUIDANCE = "guidance"
     POLICY = "policy"
     MANUAL = "manual"

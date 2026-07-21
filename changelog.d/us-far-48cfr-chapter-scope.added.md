@@ -1,0 +1,1 @@
+Add an `--only-chapter` scope to the eCFR extractor so the Federal Acquisition Regulation (FAR) can be ingested on its own as 48 CFR Chapter 1 (Parts 1-53), sharing the canonical `us/regulation/48/...` citation scheme with the rest of the CFR and US Code.
